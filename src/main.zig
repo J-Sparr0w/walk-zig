@@ -30,8 +30,10 @@ const ArgOptions = struct {
 };
 
 fn walkCurrDirWithOptions(arg_options: ArgOptions) !void {
-    var dir = try std.fs.cwd().openIterableDir("", .{});
+    // std.debug.print("\ncurrent dir iterating\n", .{});
+    // var cwd = try std.fs.cwd();
 
+    var dir = try std.fs.cwd().openIterableDir("../", .{});
     defer dir.close();
 
     var dir_iter = dir.iterate();
@@ -150,7 +152,7 @@ pub fn main() !u8 {
     defer args.deinit();
     _ = args.skip();
 
-    var arg_options = ArgOptions{};
+    var arg_options = ArgOptions{ .path = null };
     while (args.next()) |arg| {
         if (std.mem.startsWith(u8, arg, "-")) {
             //read which flag it is
