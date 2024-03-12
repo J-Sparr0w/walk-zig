@@ -33,7 +33,32 @@ fn walkCurrDirWithOptions(arg_options: ArgOptions) !void {
     // std.debug.print("\ncurrent dir iterating\n", .{});
     // var cwd = try std.fs.cwd();
 
-    var dir = try std.fs.cwd().openIterableDir("../", .{});
+    var dir = std.fs.cwd().openIterableDir(".", .{}) catch |err| {
+        var stdErr = std.io.getStdErr().writer();
+        try stdErr.print("\nERROR: current directory cannot be read [{s}]\n", .{@errorName(err)});
+        // switch (err) {
+        //     .FileNotFound => {
+        //         stdErr.print("\nERROR: Unable to open Current Directory, [{}]\n", .{@errorName(err)});
+        //     },
+        //     .NotDir => {
+        //         unreachable;
+        //     },
+        //     .AccessDenied => {
+        //         stdErr.print("\nERROR: File Access Denied for current path\n", .{});
+        //     },
+        //     .NameTooLong => {
+        //         stdErr.print("\nERROR: [{}]\n", .{@errorName(err)});
+        //     },
+        //     .InvalidUtf8 => {
+        //         stdErr.print("\nERROR: [{}]\n", .{@errorName(err)});
+        //     },
+
+        //     else => {
+
+        //     },
+        // }
+        std.process.exit(0x7f);
+    };
     defer dir.close();
 
     var dir_iter = dir.iterate();
