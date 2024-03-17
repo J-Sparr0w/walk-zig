@@ -228,6 +228,10 @@ pub fn main() !u8 {
     _ = args.skip();
 
     var arg_options = ArgOptions{ .path = null };
+
+    //TODO: argument parser should be similar to the one in scoop
+    //TODO: FIX: walk D:\ does not work
+
     while (args.next()) |arg| {
         if (std.mem.startsWith(u8, arg, "-")) {
             //read which flag it is
