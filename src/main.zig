@@ -33,6 +33,10 @@ fn walkCurrDirWithOptions(arg_options: ArgOptions) !void {
     // std.debug.print("\ncurrent dir iterating\n", .{});
     // var cwd = try std.fs.cwd();
 
+    var print_buffer = std.io.bufferedWriter(std.io.getStdOut().writer());
+    defer print_buffer.flush() catch {};
+    var writer = print_buffer.writer();
+
     var dir = std.fs.cwd().openIterableDir(".", .{}) catch |err| {
         var stdErr = std.io.getStdErr().writer();
         try stdErr.print("\nERROR: current directory cannot be read [{s}]\n", .{@errorName(err)});
@@ -57,7 +61,7 @@ fn walkCurrDirWithOptions(arg_options: ArgOptions) !void {
 
         //     },
         // }
-        std.process.exit(0x7f);
+        return err;
     };
     defer dir.close();
 
@@ -65,106 +69,152 @@ fn walkCurrDirWithOptions(arg_options: ArgOptions) !void {
     var file_count: usize = 0;
     var dir_count: usize = 0;
 
-    while (try dir_iter.next()) |entry| {
+    while (dir_iter.next() catch |err| {
+        std.log.err("Cannot continue directory traversal: {s}", .{@errorName(err)});
+        return err;
+    }) |entry| {
         switch (entry.kind) {
             .file => {
                 file_count += 1;
 
                 if (arg_options.stat) {
-                    try printFileWithStat(entry.name);
+                    try printFileWithStat(writer, entry.name);
                 } else {
-                    try printFile(entry.name);
+                    try printFile(writer, entry.name);
                 }
             },
             .directory => {
                 dir_count += 1;
 
                 if (arg_options.stat) {
-                    try printDirWithStat(entry.name);
+                    try printDirWithStat(writer, entry.name);
                 } else {
-                    try printDir(entry.name);
+                    try printDir(writer, entry.name);
                 }
             },
             else => { //other kinds of entries doesn't matter
             },
         }
     }
-    std.debug.print("\nFound {} files and {} directories\n", .{ file_count, dir_count });
+    try writer.print("\nFound {} files and {} directories\n", .{ file_count, dir_count });
 }
 
 fn walkDirWithOptions(path: []const u8, arg_options: ArgOptions) !void {
+    var print_buffer = std.io.bufferedWriter(std.io.getStdOut().writer());
+    defer print_buffer.flush() catch {};
+    var writer = print_buffer.writer();
+
     var out_buffer: [std.fs.MAX_PATH_BYTES]u8 = .{};
-    var absolute_path = try std.fs.realpath(path, &out_buffer);
+    var absolute_path = std.fs.realpath(path, &out_buffer) catch |err| {
+        std.log.err("[{s}]", .{@errorName(err)});
+        return;
+    };
     var absolute_path_ancestor = absolute_path[0 .. absolute_path.len - path.len];
     // std.debug.print("{s}", .{absolute_path});
-    var dir = try std.fs.openDirAbsolute(absolute_path_ancestor, .{});
+    var dir = std.fs.openDirAbsolute(absolute_path_ancestor, .{}) catch |err| {
+        std.log.err("Cannot open directory at path: {s} due to [{s}] error", .{ absolute_path, @errorName(err) });
+        return err;
+    };
     defer dir.close();
-    var dir_iterable = try dir.openIterableDir(path, .{});
+    var dir_iterable = dir.openIterableDir(path, .{}) catch |err| {
+        std.log.err("Cannot open directory at path: {s} for iteration due to [{s}] error", .{ absolute_path, @errorName(err) });
+        return err;
+    };
     defer dir_iterable.close();
 
     var dir_iter = dir_iterable.iterate();
     var file_count: usize = 0;
     var dir_count: usize = 0;
-    while (try dir_iter.next()) |entry| {
+    while (dir_iter.next() catch |err| {
+        std.log.err("Cannot continue directory traversal: {s}", .{@errorName(err)});
+        return err;
+    }) |entry| {
         switch (entry.kind) {
             .file => {
                 file_count += 1;
                 if (arg_options.stat) {
                     var file = dir_iterable.dir.openFile(entry.name, .{}) catch |err| {
-                        std.debug.print("{} ENTRY: {s}, DIR:{s}", .{ err, entry.name, absolute_path });
-                        return;
+                        std.log.err(" ENTRY: {s} at DIR:{s} cannot be opened due to [{s}] error", .{ entry.name, absolute_path, @errorName(err) });
+                        continue;
                     };
                     defer file.close();
-                    var stat = try file.stat();
+                    var stat =
+                        file.stat() catch {
+                        try writer.print("{s:<25}\tFILE\tNA\n", .{entry.name});
+                        continue;
+                    };
 
-                    try std.io.getStdOut().writer().print("{s:<15}\tFILE\t{}\n", .{ entry.name, std.fmt.fmtIntSizeDec(stat.size) });
+                    try writer.print("{s:<25}\tFILE\t{}\n", .{ entry.name, std.fmt.fmtIntSizeDec(stat.size) });
                 } else {
-                    try printFile(entry.name);
+                    try printFile(writer, entry.name);
                 }
             },
             .directory => {
                 dir_count += 1;
                 if (arg_options.stat) {
                     var dir_entry = dir_iterable.dir.openDir(entry.name, .{}) catch |err| {
-                        std.debug.print("{} ENTRY: {s}, DIR:{s}", .{ err, entry.name, absolute_path });
+                        std.log.err("{} ENTRY: {s}, DIR:{s}", .{ err, entry.name, absolute_path });
                         return;
                     };
                     defer dir_entry.close();
-                    var stat = try dir_entry.stat();
-
-                    try std.io.getStdOut().writer().print("{s:<15}\tFILE\t{}\n", .{ entry.name, std.fmt.fmtIntSizeDec(stat.size) });
+                    var stat =
+                        dir_entry.stat() catch {
+                        try writer.print("{s:<25}\tDIR\tNA\n", .{entry.name});
+                        continue;
+                    };
+                    try writer.print("{s:<25}\tFILE\t{}\n", .{ entry.name, std.fmt.fmtIntSizeDec(stat.size) });
                 } else {
-                    try printDir(entry.name);
+                    try printDir(writer, entry.name);
                 }
             },
             else => { //other kinds of entries doesn't matter
             },
         }
     }
+    try writer.print("\nFound {} files and {} directories\n", .{ file_count, dir_count });
 }
 
-fn printFileWithStat(file_name: []const u8) !void {
+fn printFileWithStat(writer: anytype, file_name: []const u8) !void {
     var file = try std.fs.cwd().openFile(file_name, .{});
     defer file.close();
-    var stat = try file.stat();
-
-    try std.io.getStdOut().writer().print("{s:<15}\tFILE\t{}\n", .{ file_name, std.fmt.fmtIntSizeDec(stat.size) });
+    var stat =
+        file.stat() catch {
+        try writer.print("{s:<25}\tFILE\tNA\n", .{file_name});
+        return;
+    };
+    var time_buf: [100]u8 = undefined;
+    const mtime = try calculateTime(&time_buf, stat.mtime);
+    try writer.print("{s:<25}\tFILE\t{:.2}\t{s}\n", .{ file_name, std.fmt.fmtIntSizeDec(stat.size), mtime });
 }
 
-fn printFile(file_name: []const u8) !void {
-    try std.io.getStdOut().writer().print("{s:<15}\tFILE\t\n", .{file_name});
+fn printFile(writer: anytype, file_name: []const u8) !void {
+    try writer.print("{s:<25}\tFILE\t\n", .{file_name});
 }
 
-fn printDirWithStat(file_name: []const u8) !void {
+fn printDirWithStat(writer: anytype, file_name: []const u8) !void {
     var dir_entry = try std.fs.cwd().openDir(file_name, .{});
     defer dir_entry.close();
-    var stat = try dir_entry.stat();
-
-    try std.io.getStdOut().writer().print("{s:<15}\tDIR\t{}\n", .{ file_name, std.fmt.fmtIntSizeDec(stat.size) });
+    var stat =
+        dir_entry.stat() catch {
+        try writer.print("{s:<25}\tDIR\tNA\n", .{file_name});
+        return;
+    };
+    // const epoch_day = es.getEpochDay();
+    var time_buf: [100]u8 = undefined;
+    const mtime = try calculateTime(&time_buf, stat.mtime);
+    try writer.print("{s:<25}\tDIR\t{:.2}\t{s}\n", .{ file_name, std.fmt.fmtIntSizeDec(stat.size), mtime });
 }
+fn printDir(writer: anytype, file_name: []const u8) !void {
+    try writer.print("{s:<25}\tDIR\n", .{file_name});
+}
+fn calculateTime(buf: []u8, ns_since_epoch: i128) ![]const u8 {
+    const es = std.time.epoch.EpochSeconds{ .secs = @divTrunc(@as(u64, @intCast(ns_since_epoch)), std.time.ns_per_s) };
+    const month = es.getEpochDay().calculateYearDay().calculateMonthDay().month;
+    const date = es.getEpochDay().calculateYearDay().calculateMonthDay().day_index;
+    const hours = es.getDaySeconds().getHoursIntoDay();
+    const mins = es.getDaySeconds().getMinutesIntoHour();
 
-fn printDir(file_name: []const u8) !void {
-    try std.io.getStdOut().writer().print("{s:<15}\tDIR\n", .{file_name});
+    return try std.fmt.bufPrint(buf, "{:0>2} {s} {:0>2}:{:0>2}", .{ date, @tagName(month), hours, mins });
 }
 
 pub fn main() !u8 {
@@ -212,9 +262,13 @@ pub fn main() !u8 {
         }
     }
     if (arg_options.path) |path| {
-        try walkDirWithOptions(path, arg_options);
+        walkDirWithOptions(path, arg_options) catch {
+            return 0x7f;
+        };
     } else {
-        try walkCurrDirWithOptions(arg_options);
+        walkCurrDirWithOptions(arg_options) catch {
+            return 0x7f;
+        };
     }
     return 0;
 }
